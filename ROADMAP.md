@@ -14,9 +14,10 @@
 - [x] Compatibilidad Android 11–15 en permisos (`IPermissionManager`, `IPackageManager`, `HiddenApiRefinePlugin` 4.4.0 y respaldo en `UserService`).
 - [x] Workflow manual `APK Debug` (`workflow_dispatch`) sin disparos automáticos.
 
-## Fase 3 — Próximas Mejoras Planificadas
-- [ ] Lectura rápida de `/proc/<pid>/smaps_rollup` en kernels Linux 4.14+ para reducir llamadas a `IActivityManager.getProcessMemoryInfo`.
+## Fase 3 — Optimización y Control Avanzado (En progreso)
+- [x] Lectura rápida de `/proc/<pid>/smaps_rollup` en kernels Linux 4.14+ con respaldo selectivo en `IActivityManager.getProcessMemoryInfo`.
+- [x] Evaluación por ciclo de `CriticalAppProtector` (`ProtectionContext`) para evitar consultas repetidas al `PackageManager` y `Settings.Secure`.
+- [x] Hibernación suave sin ocultar íconos del lanzador (`AppOps` `RUN_ANY_IN_BACKGROUND` + `Standby Bucket RESTRICTED`/`RARE`).
 - [ ] Historial de cierres por falta de memoria (`lmkd` / `ApplicationExitInfo` en Android 11+).
-- [ ] Hibernación suave sin ocultar íconos del lanzador (`AppOps` `RUN_ANY_IN_BACKGROUND` + `Standby Bucket RESTRICTED`).
-- [ ] Selección múltiple en el Congelador y Tile de Ajustes Rápidos (Quick Settings Tile) para congelación en un toque.
+- [ ] Selección múltiple en el Congelador y Tile de Ajustes Rápidos (Quick Settings Tile) para congelación/hibernación en un toque.
 - [ ] Exportación de reportes de picos de RAM en CSV/JSON y firma de APK Release con Keystore en GitHub Secrets para Uptodown.

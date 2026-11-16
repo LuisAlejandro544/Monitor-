@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AcUnit
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.StopCircle
@@ -279,6 +280,7 @@ fun AppDetailScreen(
             item {
                 val isProtected = liveApp?.isCriticalProtected == true
                 val isFrozen = liveApp?.isFrozen == true
+                val isSoftHibernated = liveApp?.isSoftHibernated == true
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
@@ -350,6 +352,34 @@ fun AppDetailScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(if (isFrozen) "Descongelar" else "Congelar")
                             }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.softHibernateApp(
+                                    packageName = packageName,
+                                    appName = liveApp?.appName ?: historyRecord?.appName ?: packageName,
+                                    hibernate = !isSoftHibernated
+                                )
+                            },
+                            enabled = (!isProtected || isSoftHibernated) && state.shizukuStatus.isUserServiceConnected,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Bedtime,
+                                contentDescription = null,
+                                tint = if (isSoftHibernated) MemScopeColors.EmeraldHealthy else MemScopeColors.AmberWarning,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isSoftHibernated) {
+                                    "Despertar de Hibernación Suave"
+                                } else {
+                                    "Hibernación Suave (Sin ocultar ícono)"
+                                }
+                            )
                         }
 
                         OutlinedButton(

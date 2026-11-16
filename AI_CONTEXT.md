@@ -9,8 +9,8 @@ El entorno web en la raíz (`src/App.tsx`) debe permanecer estrictamente como un
 1. **Modularidad estricta**:
    - `:core:model` no tiene dependencias internas.
    - `:core:hidden-api` contiene stubs Java de `IPackageManager`, `IPermissionManager` y `IActivityManager` consumidos únicamente como `compileOnly` desde `:core:shizuku` junto con `dev.rikka.tools.refine` (`4.4.0`) y `HiddenApiBypass` (`4.3`).
-   - `:core:shizuku` ejecuta operaciones IPC pesadas en `Dispatchers.IO`. El `TaskMonitorUserService` corre en proceso aislado (UID `0` o `2000`) leyendo `/proc` directamente (`VmRSS`, `VmHWM`, `VmSwap`, `Threads`, `/proc/<pid>/stat`, `/proc/stat`, `/proc/meminfo`).
-   - `:core:data` agrega procesos por paquete, calcula deltas de CPU % y picos de sesión, protege paquetes críticos (`CriticalAppProtector`) y persiste historial en **Room** (`2.8.4`) + preferencias en **DataStore** (`1.1.7`).
+   - `:core:shizuku` ejecuta operaciones IPC pesadas en `Dispatchers.IO`. El `TaskMonitorUserService` corre en proceso aislado (UID `0` o `2000`) leyendo `/proc` directamente (`/proc/<pid>/smaps_rollup`, `VmRSS`, `VmHWM`, `VmSwap`, `Threads`, `/proc/<pid>/stat`, `/proc/stat`, `/proc/meminfo`) y gestionando hibernación suave (`AppOps` + `Standby Bucket`) sin ocultar íconos del lanzador. Todos los métodos de `ITaskMonitorService.aidl` definen IDs de transacción explícitos (`1..6` + `destroy() = 16777114`).
+   - `:core:data` agrega procesos por paquete priorizando `smaps_rollup` (con respaldo selectivo en `IActivityManager` solo cuando el kernel/SELinux no expone `smaps_rollup`), calcula deltas de CPU % y picos de sesión, protege paquetes críticos mediante `CriticalAppProtector` capturado una vez por ciclo (`ProtectionContext`) y persiste historial en **Room** (`2.8.4`) + preferencias en **DataStore** (`1.1.7`).
    - La comunicación hacia `BackgroundMonitorService` (`:app`) se desacopla mediante `BackgroundMonitorController` (`:core:data`).
 
 2. **Compatibilidad Android**:

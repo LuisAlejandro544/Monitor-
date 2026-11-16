@@ -295,6 +295,33 @@ class ShizukuManager(
             directResult
         }
 
+    suspend fun setSoftHibernation(packageName: String, hibernate: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val svc = userService
+            if (svc == null || !svc.asBinder().pingBinder()) {
+                return@withContext Result.failure(
+                    IllegalStateException("UserService de Shizuku no conectado aún.")
+                )
+            }
+            val userId = Process.myUserHandle().hashCode()
+            runCatching {
+                val ok = svc.setSoftHibernation(packageName, userId, hibernate)
+                if (!ok) {
+                    throw IllegalStateException("No se pudo aplicar hibernación suave a $packageName")
+                }
+            }
+        }
+
+    suspend fun getSoftHibernatedPackages(): Set<String> =
+        withContext(Dispatchers.IO) {
+            val svc = userService
+            if (svc == null || !svc.asBinder().pingBinder()) return@withContext emptySet()
+            val userId = Process.myUserHandle().hashCode()
+            runCatching {
+                svc.getSoftHibernatedPackages(userId)?.toSet() ?: emptySet()
+            }.getOrDefault(emptySet())
+        }
+
     suspend fun revokeRuntimePermission(packageName: String, permissionName: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             val userId = Process.myUserHandle().hashCode()

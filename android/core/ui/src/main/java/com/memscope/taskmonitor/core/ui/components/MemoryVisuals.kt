@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AcUnit
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Android
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -78,6 +79,11 @@ object MemoryFormatter {
         } else {
             String.format(Locale.US, "%.1f MB", mb)
         }
+    }
+
+    fun formatCpu(percent: Float): String {
+        val safe = percent.coerceIn(0f, 100f)
+        return String.format(Locale.US, "%.1f%%", safe)
     }
 
     fun formatDurationSeconds(seconds: Long): String {
@@ -551,6 +557,34 @@ fun FrozenStateChip(modifier: Modifier = Modifier) {
                 text = "CONGELADA",
                 style = MaterialTheme.typography.labelSmall,
                 color = MemScopeColors.IndigoFrozen
+            )
+        }
+    }
+}
+
+@Composable
+fun SoftHibernatedStateChip(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        color = MemScopeColors.AmberWarning.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, MemScopeColors.AmberWarning.copy(alpha = 0.45f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Bedtime,
+                contentDescription = null,
+                tint = MemScopeColors.AmberWarning,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(3.dp))
+            Text(
+                text = "HIBERNADA",
+                style = MaterialTheme.typography.labelSmall,
+                color = MemScopeColors.AmberWarning
             )
         }
     }

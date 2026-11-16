@@ -190,6 +190,21 @@ class MonitorViewModel(
         }
     }
 
+    fun softHibernateApp(packageName: String, appName: String, hibernate: Boolean) {
+        viewModelScope.launch {
+            val res = repository.softHibernateApp(packageName, hibernate)
+            actionFeedback.value = if (res.isSuccess) {
+                if (hibernate) {
+                    "$appName en hibernación suave (ícono conservado)."
+                } else {
+                    "$appName despertada de hibernación suave."
+                }
+            } else {
+                res.exceptionOrNull()?.message ?: "Error en hibernación suave de $appName"
+            }
+        }
+    }
+
     fun clearFeedback() {
         actionFeedback.update { null }
     }

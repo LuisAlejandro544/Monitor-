@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 
 enum class FreezerFilter(val labelEs: String) {
     ALL_USER("Apps Usuario"),
+    SOFT_HIBERNATED("Hibernadas"),
     FROZEN_ONLY("Congeladas"),
     ACTIVE_ONLY("Activas"),
     SYSTEM_APPS("Sistema")
@@ -28,13 +29,14 @@ data class FreezerUiState(
     val filter: FreezerFilter = FreezerFilter.ALL_USER,
     val apps: List<InstalledAppFreezeInfo> = emptyList(),
     val frozenCount: Int = 0,
+    val softHibernatedCount: Int = 0,
     val shizukuStatus: ShizukuStatus = ShizukuStatus(),
     val feedbackMessage: String? = null,
     val isLoading: Boolean = false
 )
 
 /**
- * ViewModel del módulo Congelador.
+ * ViewModel del módulo Congelador e Hibernación Suave.
  * Carga los paquetes instalados en Dispatchers.IO y aplica filtros/búsqueda en Dispatchers.Default.
  */
 class FreezerViewModel(
@@ -70,8 +72,9 @@ class FreezerViewModel(
         val filtered = allApps.filter { app ->
             val matchesCat = when (activeFilter) {
                 FreezerFilter.ALL_USER -> !app.isSystemApp
+                FreezerFilter.SOFT_HIBERNATED -> app.isSoftHibernated
                 FreezerFilter.FROZEN_ONLY -> app.isFrozen
-                FreezerFilter.ACTIVE_ONLY -> !app.isFrozen && !app.isSystemApp
+                FreezerFilter.ACTIVE_ONLY -> !app.isFrozen && !app.isSoftHibernated && !app.isSystemApp
                 FreezerFilter.SYSTEM_APPS -> app.isSystemApp
             }
             val matchesQuery = query.isEmpty() ||
@@ -85,6 +88,7 @@ class FreezerViewModel(
             filter = activeFilter,
             apps = filtered,
             frozenCount = allApps.count { it.isFrozen },
+            softHibernatedCount = allApps.count { it.isSoftHibernated },
             shizukuStatus = shizuku,
             feedbackMessage = fb,
             isLoading = loading
@@ -122,6 +126,22 @@ class FreezerViewModel(
                     "${app.appName} ha sido congelada."
                 } else {
                     "${app.appName} ha sido descongelada."
+                }
+            } else {
+                "Error en ${app.appName}: ${res.exceptionOrNull()?.message}"
+            }
+        }
+    }
+
+    fun toggleSoftHibernation(app: InstalledAppFreezeInfo) {
+        viewModelScope.launch {
+            val targetHibernate = !app.isSoftHibernated
+            val res = repository.softHibernateApp(app.packageName, targetHibernate)
+            feedbackMessage.value = if (res.isSuccess) {
+                if (targetHibernate) {
+                    "${app.appName} en hibernación suave (ícono visible en lanzador)."
+                } else {
+                    "${app.appName} despertada (segundo plano restaurado)."
                 }
             } else {
                 "Error en ${app.appName}: ${res.exceptionOrNull()?.message}"

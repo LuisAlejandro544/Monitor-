@@ -1,6 +1,7 @@
 package com.memscope.taskmonitor.core.shizuku
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.annotation.Keep
 import java.io.File
@@ -13,11 +14,14 @@ import kotlin.system.exitProcess
  *
  * Lee directamente el sistema de archivos /proc del kernel Linux para obtener:
  * - VmRSS, VmHWM (pico del kernel), VmSwap y Threads desde /proc/<pid>/status
+ * - Pss, Rss, Private_Dirty y SwapPss desde /proc/<pid>/smaps_rollup (kernels 4.14+)
  * - utime + stime desde /proc/<pid>/stat para calcular el porcentaje real de CPU
  * - /proc/stat para el total global de CPU jiffies
  * - /proc/meminfo para el desglose físico del sistema
- * También provee un respaldo compatible Android 11-15 para permisos runtime sin usar
- * el método obsoleto Shizuku#newProcess (reemplazado por UserService según la doc oficial).
+ *
+ * Además gestiona permisos runtime en Android 11-15 y la hibernación suave
+ * (AppOps RUN_ANY_IN_BACKGROUND + Standby Bucket) sin deshabilitar ni ocultar íconos del lanzador,
+ * todo sin usar el método obsoleto Shizuku#newProcess.
  */
 @Keep
 class TaskMonitorUserService : ITaskMonitorService.Stub {
@@ -67,6 +71,12 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
                 }
             }
 
+            // Lectura rápida de /proc/<pid>/smaps_rollup (Linux 4.14+) para obtener PSS real
+            // sin saturar Binder con IActivityManager.getProcessMemoryInfo.
+            val rollup = readSmapsRollup(pid)
+            val effectiveRss = if (rollup.rssKb > 0L) rollup.rssKb else vmRss
+            val effectiveSwap = if (rollup.swapKb > 0L) rollup.swapKb else vmSwap
+
             val oomAdj = runCatching {
                 val adjFile = File("/proc/$pid/oom_score_adj")
                 if (adjFile.exists() && adjFile.canRead()) {
@@ -81,17 +91,77 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
             results.add(
                 ProcessKernelMem(
                     pid = pid,
-                    vmRssKb = vmRss,
+                    vmRssKb = effectiveRss,
                     vmHwmKb = vmHwm,
-                    vmSwapKb = vmSwap,
+                    vmSwapKb = effectiveSwap,
                     oomScoreAdj = oomAdj,
                     procName = name,
                     procCpuJiffies = cpuJiffies,
-                    threadCount = threads
+                    threadCount = threads,
+                    smapsRollupPssKb = rollup.pssKb,
+                    smapsRollupPrivateDirtyKb = rollup.privateDirtyKb,
+                    hasSmapsRollup = rollup.available
                 )
             )
         }
         return results.toTypedArray()
+    }
+
+    private data class SmapsRollupStats(
+        val available: Boolean = false,
+        val pssKb: Long = 0L,
+        val rssKb: Long = 0L,
+        val privateDirtyKb: Long = 0L,
+        val swapKb: Long = 0L
+    )
+
+    /**
+     * Lee el resumen agregado del kernel en /proc/<pid>/smaps_rollup.
+     * Si el kernel es < 4.14 o SELinux restringe la lectura en modo ADB, devuelve available = false
+     * para que el repositorio aplique respaldo selectivo con IActivityManager.
+     */
+    private fun readSmapsRollup(pid: Int): SmapsRollupStats {
+        val rollupFile = File("/proc/$pid/smaps_rollup")
+        if (!rollupFile.exists() || !rollupFile.canRead()) {
+            return SmapsRollupStats()
+        }
+
+        var pss = 0L
+        var rss = 0L
+        var privDirty = 0L
+        var swapPss = 0L
+        var swap = 0L
+        var parsedAny = false
+
+        return runCatching {
+            rollupFile.forEachLine { line ->
+                when {
+                    line.startsWith("Rss:") -> {
+                        rss = parseKbValue(line)
+                    }
+                    line.startsWith("Pss:") -> {
+                        pss = parseKbValue(line)
+                        parsedAny = true
+                    }
+                    line.startsWith("Private_Dirty:") -> {
+                        privDirty = parseKbValue(line)
+                    }
+                    line.startsWith("SwapPss:") -> {
+                        swapPss = parseKbValue(line)
+                    }
+                    line.startsWith("Swap:") -> {
+                        swap = parseKbValue(line)
+                    }
+                }
+            }
+            SmapsRollupStats(
+                available = parsedAny && pss > 0L,
+                pssKb = pss,
+                rssKb = rss,
+                privateDirtyKb = privDirty,
+                swapKb = if (swapPss > 0L) swapPss else swap
+            )
+        }.getOrDefault(SmapsRollupStats())
     }
 
     /**
@@ -169,21 +239,149 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
         grant: Boolean
     ): Boolean {
         if (packageName.isNullOrBlank() || permissionName.isNullOrBlank()) return false
-        return runCatching {
-            val action = if (grant) "grant" else "revoke"
-            val process = ProcessBuilder(
-                "pm",
-                action,
-                "--user",
-                userId.toString(),
+        val action = if (grant) "grant" else "revoke"
+        return runCommandOk(
+            "pm",
+            action,
+            "--user",
+            userId.toString(),
+            packageName,
+            permissionName
+        )
+    }
+
+    /**
+     * Aplica o revierte Hibernación Suave SIN ocultar el ícono de la aplicación en el lanzador.
+     * - Restringe ejecución en segundo plano vía AppOps (RUN_ANY_IN_BACKGROUND en API 28+ / RUN_IN_BACKGROUND en API 26-27).
+     * - Ajusta el Standby Bucket a RESTRICTED (Android 12+) o RARE (Android 9-11), y lo devuelve a ACTIVE al despertar.
+     */
+    override fun setSoftHibernation(
+        packageName: String?,
+        userId: Int,
+        hibernate: Boolean
+    ): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val mode = if (hibernate) "ignore" else "allow"
+
+        val primaryOpOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCommandOk(
+                "cmd", "appops", "set",
+                "--user", userId.toString(),
                 packageName,
-                permissionName
+                "RUN_ANY_IN_BACKGROUND",
+                mode
             )
+        } else {
+            false
+        }
+
+        val legacyOpOk = runCommandOk(
+            "cmd", "appops", "set",
+            "--user", userId.toString(),
+            packageName,
+            "RUN_IN_BACKGROUND",
+            mode
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (hibernate) {
+                val restrictedOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    runCommandOk(
+                        "am", "set-standby-bucket",
+                        "--user", userId.toString(),
+                        packageName,
+                        "restricted"
+                    )
+                } else {
+                    false
+                }
+                if (!restrictedOk) {
+                    runCommandOk(
+                        "am", "set-standby-bucket",
+                        "--user", userId.toString(),
+                        packageName,
+                        "rare"
+                    )
+                }
+            } else {
+                runCommandOk(
+                    "am", "set-standby-bucket",
+                    "--user", userId.toString(),
+                    packageName,
+                    "active"
+                )
+            }
+        }
+
+        return primaryOpOk || legacyOpOk
+    }
+
+    /**
+     * Lista todos los paquetes actualmente restringidos en segundo plano (hibernación suave)
+     * en una sola consulta rápida desde el UserService.
+     */
+    override fun getSoftHibernatedPackages(userId: Int): Array<String> {
+        val opName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            "RUN_ANY_IN_BACKGROUND"
+        } else {
+            "RUN_IN_BACKGROUND"
+        }
+
+        val queryResult = runCommandWithOutput(
+            "cmd", "appops", "query-op",
+            "--user", userId.toString(),
+            opName,
+            "ignore"
+        )
+        if (queryResult.first) {
+            return queryResult.second
+                .lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("No ") && it.contains('.') }
+                .distinct()
+                .toList()
+                .toTypedArray()
+        }
+
+        // Respaldo para Android 8-10 donde `cmd appops query-op` puede no estar disponible
+        val dumpResult = runCommandWithOutput("dumpsys", "appops")
+        if (!dumpResult.first) return emptyArray()
+
+        val found = LinkedHashSet<String>()
+        var currentPkg: String? = null
+        dumpResult.second.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            if (line.startsWith("Package ")) {
+                currentPkg = line.removePrefix("Package ").substringBefore(':').trim()
+            } else if (currentPkg != null &&
+                (line.contains("RUN_ANY_IN_BACKGROUND") || line.contains("RUN_IN_BACKGROUND")) &&
+                line.contains("ignore")
+            ) {
+                found.add(currentPkg!!)
+            }
+        }
+        return found.toTypedArray()
+    }
+
+    private fun runCommandOk(vararg args: String): Boolean {
+        return runCatching {
+            val process = ProcessBuilder(*args)
                 .redirectErrorStream(true)
                 .start()
             val finished = process.waitFor(5, TimeUnit.SECONDS)
             finished && process.exitValue() == 0
         }.getOrDefault(false)
+    }
+
+    private fun runCommandWithOutput(vararg args: String): Pair<Boolean, String> {
+        return runCatching {
+            val process = ProcessBuilder(*args)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val finished = process.waitFor(6, TimeUnit.SECONDS)
+            (finished && process.exitValue() == 0) to output
+        }.getOrDefault(false to "")
     }
 
     private fun parseKbValue(line: String): Long {

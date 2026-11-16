@@ -5,10 +5,12 @@ Proyecto compuesto por:
 2. **Aplicación Móvil Android (`android/`)**: Administrador de tareas avanzado estilo escritorio en **Kotlin + Jetpack Compose + Material Icons Extended + Shizuku API**, pensado para distribución directa en APK (Uptodown / terceros) y compilación sin PC mediante GitHub Actions.
 
 ## Capacidades Principales
-- **Monitor en tiempo real (`:feature:monitor`)**: Consumo de RAM (`PSS`, `RSS`, `Private Dirty`, `Native/Dalvik`, `ZRAM`), uso de **CPU (%)** e **Hilos** por proceso, curva de historial reciente en `Canvas` y detención forzada.
+- **Monitor en tiempo real (`:feature:monitor`)**: Consumo de RAM (`PSS` vía `/proc/<pid>/smaps_rollup` en kernels 4.14+ con respaldo selectivo en `IActivityManager`, `RSS`, `Private Dirty`, `Native/Dalvik`, `ZRAM`), uso de **CPU (%)** e **Hilos** por proceso, curva de historial reciente en `Canvas` y detención forzada.
 - **Monitoreo real en segundo plano (`BackgroundMonitorService`)**: Foreground Service (`dataSync`) con notificación persistente de baja prioridad que registra picos reales mientras usas otras apps, con acciones de **Pausar/Reanudar** y **Detener**.
 - **Picos e Historial RAM (`:feature:peaks`)**: Persistencia en **Room** de cuánto consumió cada app mientras corría, promedio activo, tiempo monitoreado, pico PSS y pico del kernel Linux (`VmHWM`).
-- **Congelador de Apps (`:feature:freezer`)**: Deshabilitación de paquetes (`DISABLED_USER`) vía `IPackageManager` + Shizuku con **lista blanca crítica (`CriticalAppProtector`)** que protege `SystemUI`, Shizuku, el Launcher activo y el Teclado activo.
+- **Congelador e Hibernación Suave (`:feature:freezer`)**:
+  - **Hibernación Suave (sin ocultar íconos)**: Restringe ejecución en segundo plano mediante `AppOps` (`RUN_ANY_IN_BACKGROUND`) + `Standby Bucket` (`RESTRICTED`/`RARE`) y detiene procesos activos conservando el ícono visible en el lanzador.
+  - **Congelación completa**: Deshabilitación de paquetes (`DISABLED_USER`) vía `IPackageManager` + Shizuku con **lista blanca crítica (`CriticalAppProtector`)** que protege `SystemUI`, Shizuku, el Launcher activo y el Teclado activo.
 - **Herramientas Shizuku (`:feature:shizuku_tools`)**: Diagnóstico Binder/Sui, UID (`0` Root / `2000` ADB), control del `UserService`, intervalos de muestreo y otorgamiento de permisos runtime compatible con **Android 8–15** (`IPackageManager` + `IPermissionManager` + respaldo `UserService`).
 
 ## Stack y Compilación (`android/`)

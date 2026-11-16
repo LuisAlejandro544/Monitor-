@@ -57,6 +57,7 @@ data class AppMemoryInfo(
     val oomScoreAdj: Int,
     val isSystemApp: Boolean,
     val isFrozen: Boolean,
+    val isSoftHibernated: Boolean = false,
     val cpuUsagePercent: Float = 0f,
     val totalThreads: Int = 0,
     val isCriticalProtected: Boolean = false,

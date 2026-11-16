@@ -45,6 +45,7 @@ data class InstalledAppFreezeInfo(
     val versionName: String,
     val isSystemApp: Boolean,
     val isFrozen: Boolean,
+    val isSoftHibernated: Boolean = false,
     val enabledSetting: Int,
     val isRunningNow: Boolean,
     val currentRamKb: Long,

@@ -27,12 +27,12 @@
     ├── core/
     │   ├── model/                    # :core:model — Modelos puros (AppMemoryInfo, ShizukuStatus, etc.)
     │   ├── hidden-api/               # :core:hidden-api — Stubs compileOnly (IPackageManager, IPermissionManager, IActivityManager)
-    │   ├── shizuku/                  # :core:shizuku — AIDL, TaskMonitorUserService, ShizukuSystemBridge, ShizukuManager
-    │   ├── data/                     # :core:data — Room DB, DataStore, CriticalAppProtector, TaskMonitorRepository
+    │   ├── shizuku/                  # :core:shizuku — AIDL, TaskMonitorUserService (/proc + smaps_rollup + AppOps), ShizukuSystemBridge, ShizukuManager
+    │   ├── data/                     # :core:data — Room DB, DataStore, CriticalAppProtector (ProtectionContext), TaskMonitorRepository
     │   └── ui/                       # :core:ui — Tema Material 3, Canvas Sparkline, AppPackageIcon, badges
     └── feature/
         ├── monitor/                  # :feature:monitor — MonitorScreen y AppDetailScreen
         ├── peaks/                    # :feature:peaks — PeaksScreen (picos PSS/VmHWM y promedios)
-        ├── freezer/                  # :feature:freezer — FreezerScreen (congelación segura)
+        ├── freezer/                  # :feature:freezer — FreezerScreen (congelación segura e hibernación suave sin ocultar íconos)
         └── shizuku_tools/            # :feature:shizuku_tools — Diagnóstico Binder, UserService, intervalos y permisos
 ```

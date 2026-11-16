@@ -79,6 +79,7 @@ import com.memscope.taskmonitor.core.ui.components.MemoryFormatter
 import com.memscope.taskmonitor.core.ui.components.MemorySparklineChart
 import com.memscope.taskmonitor.core.ui.components.ProtectedPackageChip
 import com.memscope.taskmonitor.core.ui.components.ShizukuActionBanner
+import com.memscope.taskmonitor.core.ui.components.SoftHibernatedStateChip
 import com.memscope.taskmonitor.core.ui.components.SystemMemoryHeaderCard
 import com.memscope.taskmonitor.core.ui.theme.MemScopeColors
 
@@ -422,6 +423,9 @@ private fun ProcessTaskRowCard(
                         if (app.isFrozen) {
                             Spacer(modifier = Modifier.width(6.dp))
                             FrozenStateChip()
+                        } else if (app.isSoftHibernated) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            SoftHibernatedStateChip()
                         } else if (app.isCriticalProtected) {
                             Spacer(modifier = Modifier.width(6.dp))
                             ProtectedPackageChip()

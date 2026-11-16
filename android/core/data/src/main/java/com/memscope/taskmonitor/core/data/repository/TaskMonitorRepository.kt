@@ -204,21 +204,7 @@ class TaskMonitorRepository(
 
         val allPids = processes.map { it.pid }.distinct().toIntArray()
 
-        // Lectura en lotes de 40 PIDs para evitar saturar transacciones Binder
-        val memoryInfoByPid = HashMap<Int, android.os.Debug.MemoryInfo>(allPids.size)
-        allPids.toList().chunked(40).forEach { chunk ->
-            val chunkArray = chunk.toIntArray()
-            val memInfos = shizukuManager.getProcessMemoryInfo(chunkArray).getOrNull()
-            if (memInfos != null) {
-                for (i in chunkArray.indices) {
-                    if (i < memInfos.size) {
-                        memoryInfoByPid[chunkArray[i]] = memInfos[i]
-                    }
-                }
-            }
-        }
-
-        // Lectura del kernel vía UserService: VmRSS, VmHWM, VmSwap, Threads y CPU jiffies
+        // Lectura del kernel vía UserService primero: smaps_rollup (PSS real), VmRSS, VmHWM, VmSwap, Threads y CPU jiffies
         val currTotalCpuJiffies = shizukuManager.readTotalCpuJiffies()
         val totalCpuDelta = if (prevTotalCpuJiffies > 0L && currTotalCpuJiffies > prevTotalCpuJiffies) {
             currTotalCpuJiffies - prevTotalCpuJiffies
@@ -234,6 +220,25 @@ class TaskMonitorRepository(
         allPids.forEach { activePidSet.add(it) }
         prevPidCpuJiffies.keys.retainAll(activePidSet)
 
+        // Solo consultar IActivityManager.getProcessMemoryInfo para los PIDs donde smaps_rollup no esté disponible
+        val pidsNeedingFallback = allPids.filter { pid ->
+            kernelMemByPid[pid]?.hasSmapsRollup != true
+        }
+        val memoryInfoByPid = HashMap<Int, android.os.Debug.MemoryInfo>(pidsNeedingFallback.size)
+        if (pidsNeedingFallback.isNotEmpty()) {
+            pidsNeedingFallback.chunked(40).forEach { chunk ->
+                val chunkArray = chunk.toIntArray()
+                val memInfos = shizukuManager.getProcessMemoryInfo(chunkArray).getOrNull()
+                if (memInfos != null) {
+                    for (i in chunkArray.indices) {
+                        if (i < memInfos.size) {
+                            memoryInfoByPid[chunkArray[i]] = memInfos[i]
+                        }
+                    }
+                }
+            }
+        }
+
         // Agrupar procesos por paquete principal
         val groupedByPkg = LinkedHashMap<String, MutableList<ActivityManager.RunningAppProcessInfo>>()
         for (proc in processes) {
@@ -242,6 +247,10 @@ class TaskMonitorRepository(
             if (primaryPkg.isBlank()) continue
             groupedByPkg.getOrPut(primaryPkg) { mutableListOf() }.add(proc)
         }
+
+        // Capturar contexto de protección crítica y apps en hibernación suave una sola vez por ciclo
+        val protectionContext = criticalProtector.captureContext()
+        val softHibernatedSet = shizukuManager.getSoftHibernatedPackages()
 
         // Una única consulta previa a Room para evitar lecturas N+1 en el bucle
         val existingHistoryMap = historyDao.getAllHistoryOnce().associateBy { it.packageName }
@@ -253,7 +262,7 @@ class TaskMonitorRepository(
 
         for ((pkg, procList) in groupedByPkg) {
             val (appName, isSystem) = resolveAppInfo(pkg)
-            val protection = criticalProtector.evaluate(pkg)
+            val protection = criticalProtector.evaluate(pkg, protectionContext)
             var totalPssKb = 0L
             var totalRssKb = 0L
             var totalHwmKb = 0L
@@ -273,8 +282,16 @@ class TaskMonitorRepository(
                 val dbg = memoryInfoByPid[proc.pid]
                 val kernel = kernelMemByPid[proc.pid]
 
-                val pss = (dbg?.totalPss ?: 0).toLong()
-                val privDirty = (dbg?.totalPrivateDirty ?: 0).toLong()
+                val pss = if (kernel != null && kernel.hasSmapsRollup) {
+                    kernel.smapsRollupPssKb
+                } else {
+                    (dbg?.totalPss ?: 0).toLong()
+                }
+                val privDirty = if (kernel != null && kernel.hasSmapsRollup) {
+                    kernel.smapsRollupPrivateDirtyKb
+                } else {
+                    (dbg?.totalPrivateDirty ?: 0).toLong()
+                }
                 val nativePss = (dbg?.nativePss ?: 0).toLong()
                 val dalvikPss = (dbg?.dalvikPss ?: 0).toLong()
                 val swappableOrSwap = kernel?.vmSwapKb ?: (dbg?.totalSwappablePss ?: 0).toLong()
@@ -327,6 +344,7 @@ class TaskMonitorRepository(
             sessionPeaks[pkg] = newSessionPeak
 
             val isFrozen = isPackageDisabledByUser(pkg)
+            val isSoftHibernated = softHibernatedSet.contains(pkg)
 
             updatedApps.add(
                 AppMemoryInfo(
@@ -345,6 +363,7 @@ class TaskMonitorRepository(
                     oomScoreAdj = lowestOomAdj,
                     isSystemApp = isSystem,
                     isFrozen = isFrozen,
+                    isSoftHibernated = isSoftHibernated,
                     cpuUsagePercent = cpuPercent,
                     totalThreads = totalThreads,
                     isCriticalProtected = protection.isProtected,
@@ -411,7 +430,7 @@ class TaskMonitorRepository(
     }
 
     /**
-     * Carga la lista completa de aplicaciones instaladas (activas, congeladas y protegidas).
+     * Carga la lista completa de aplicaciones instaladas (activas, congeladas, en hibernación suave y protegidas).
      */
     suspend fun refreshInstalledApps() = withContext(Dispatchers.IO) {
         val packages: List<PackageInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -422,6 +441,8 @@ class TaskMonitorRepository(
         }
 
         val runningByPkg = _runningApps.value.associateBy { it.packageName }
+        val protectionContext = criticalProtector.captureContext()
+        val softHibernatedSet = shizukuManager.getSoftHibernatedPackages()
 
         val mapped = packages.mapNotNull { pkgInfo ->
             val appInfo = pkgInfo.applicationInfo ?: return@mapNotNull null
@@ -438,8 +459,9 @@ class TaskMonitorRepository(
                 enabledState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
                 enabledState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
 
+            val isSoftHibernated = softHibernatedSet.contains(pkgInfo.packageName)
             val running = runningByPkg[pkgInfo.packageName]
-            val protection = criticalProtector.evaluate(pkgInfo.packageName)
+            val protection = criticalProtector.evaluate(pkgInfo.packageName, protectionContext)
 
             InstalledAppFreezeInfo(
                 packageName = pkgInfo.packageName,
@@ -447,13 +469,18 @@ class TaskMonitorRepository(
                 versionName = pkgInfo.versionName ?: "—",
                 isSystemApp = isSystem,
                 isFrozen = isFrozen,
+                isSoftHibernated = isSoftHibernated,
                 enabledSetting = enabledState,
                 isRunningNow = running != null,
                 currentRamKb = running?.currentPssKb ?: 0L,
                 isCriticalProtected = protection.isProtected,
                 protectionReason = protection.reason
             )
-        }.sortedWith(compareByDescending<InstalledAppFreezeInfo> { it.isFrozen }.thenBy { it.appName.lowercase() })
+        }.sortedWith(
+            compareByDescending<InstalledAppFreezeInfo> { it.isFrozen }
+                .thenByDescending { it.isSoftHibernated }
+                .thenBy { it.appName.lowercase() }
+        )
 
         _installedApps.value = mapped
     }
@@ -474,6 +501,31 @@ class TaskMonitorRepository(
         val result = shizukuManager.setApplicationFrozen(packageName, freeze)
         if (result.isSuccess) {
             if (freeze) {
+                shizukuManager.forceStopPackage(packageName)
+            }
+            refreshInstalledApps()
+            sampleOnce()
+        }
+        return result
+    }
+
+    /**
+     * Aplica o revierte Hibernación Suave (AppOps RUN_ANY_IN_BACKGROUND + Standby Bucket RESTRICTED/RARE)
+     * SIN ocultar el ícono de la aplicación del lanzador.
+     */
+    suspend fun softHibernateApp(packageName: String, hibernate: Boolean): Result<Unit> {
+        if (hibernate) {
+            val protection = criticalProtector.evaluate(packageName)
+            if (protection.isProtected) {
+                return Result.failure(
+                    IllegalStateException("Protegida contra bloqueo: ${protection.reason}")
+                )
+            }
+        }
+
+        val result = shizukuManager.setSoftHibernation(packageName, hibernate)
+        if (result.isSuccess) {
+            if (hibernate) {
                 shizukuManager.forceStopPackage(packageName)
             }
             refreshInstalledApps()

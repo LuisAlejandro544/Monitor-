@@ -9,9 +9,9 @@ Al modificar o ampliar este repositorio, cualquier agente o desarrollador debe r
 2. **Reglas Shizuku y Android**:
    - No usar propiedades `persist.sys.*`.
    - No usar el método obsoleto `Shizuku#newProcess`; usar `ITaskMonitorService` (`UserService`) o llamadas Binder remotas vía `ShizukuBinderWrapper`.
-   - Mantener `destroy() = 16777114` en `ITaskMonitorService.aidl` terminando con `exitProcess(0)`.
+   - Mantener `destroy() = 16777114` en `ITaskMonitorService.aidl` terminando con `exitProcess(0)` y asignar IDs de transacción explícitos a todos los métodos de la interfaz AIDL.
    - Mantener la compatibilidad multi-versión Android 8–15 en `ShizukuSystemBridge` (`IPackageManager` + `IPermissionManager` + respaldo `UserService`) y `compileOnly(project(":core:hidden-api"))` con `dev.rikka.tools.refine`.
-   - Nunca permitir congelar paquetes críticos protegidos por `CriticalAppProtector` (SystemUI, Shizuku, Launcher activo, Teclado activo, app propia).
+   - Nunca permitir congelar ni aplicar hibernación suave a paquetes críticos protegidos por `CriticalAppProtector` (SystemUI, Shizuku, Launcher activo, Teclado activo, app propia).
 
 3. **Rendimiento y Concurrencia**:
    - Todo acceso a `/proc`, `PackageManager`, `IActivityManager`, Room y DataStore debe ejecutarse en `Dispatchers.IO` o `Dispatchers.Default`, nunca en el hilo principal (`Main`).

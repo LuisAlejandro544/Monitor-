@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AcUnit
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -58,12 +59,15 @@ import com.memscope.taskmonitor.core.ui.components.FrozenStateChip
 import com.memscope.taskmonitor.core.ui.components.MemoryFormatter
 import com.memscope.taskmonitor.core.ui.components.ProtectedPackageChip
 import com.memscope.taskmonitor.core.ui.components.ShizukuActionBanner
+import com.memscope.taskmonitor.core.ui.components.SoftHibernatedStateChip
 import com.memscope.taskmonitor.core.ui.theme.MemScopeColors
 
 /**
- * Pantalla del Congelador de Aplicaciones (App Freezer).
- * Deshabilita aplicaciones para evitar que consuman RAM en segundo plano sin desinstalarlas,
- * con advertencia especial cuando se intenta congelar un paquete del sistema.
+ * Pantalla del Congelador de Aplicaciones (App Freezer) e Hibernación Suave.
+ * Permite:
+ * - Hibernación suave (AppOps + Standby Bucket): detiene procesos y restringe segundo plano
+ *   SIN ocultar el ícono de la app en el lanzador.
+ * - Congelación completa (DISABLED_USER): deshabilita el paquete hasta que el usuario lo active.
  */
 @Composable
 fun FreezerScreen(
@@ -74,6 +78,7 @@ fun FreezerScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingApp by remember { mutableStateOf<InstalledAppFreezeInfo?>(null) }
+    var pendingSoftApp by remember { mutableStateOf<InstalledAppFreezeInfo?>(null) }
 
     LaunchedEffect(state.feedbackMessage) {
         val msg = state.feedbackMessage
@@ -106,7 +111,7 @@ fun FreezerScreen(
                             style = MaterialTheme.typography.headlineSmall
                         )
                         Text(
-                            text = "Congeladas actualmente: ${state.frozenCount}",
+                            text = "Hibernadas (visibles): ${state.softHibernatedCount} • Congeladas: ${state.frozenCount}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -175,7 +180,9 @@ fun FreezerScreen(
                 FreezerAppCard(
                     app = app,
                     shizukuReady = state.shizukuStatus.isFullyOperational,
-                    onActionClick = { pendingApp = app }
+                    userServiceReady = state.shizukuStatus.isUserServiceConnected,
+                    onFreezeActionClick = { pendingApp = app },
+                    onSoftHibernateClick = { pendingSoftApp = app }
                 )
             }
         }
@@ -238,13 +245,66 @@ fun FreezerScreen(
             }
         )
     }
+
+    val confirmSoftApp = pendingSoftApp
+    if (confirmSoftApp != null) {
+        val willHibernate = !confirmSoftApp.isSoftHibernated
+        AlertDialog(
+            onDismissRequest = { pendingSoftApp = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.Bedtime,
+                    contentDescription = null,
+                    tint = if (willHibernate) MemScopeColors.AmberWarning else MemScopeColors.EmeraldHealthy
+                )
+            },
+            title = {
+                Text(
+                    if (willHibernate) {
+                        "Hibernación suave: ${confirmSoftApp.appName}"
+                    } else {
+                        "Despertar: ${confirmSoftApp.appName}"
+                    }
+                )
+            },
+            text = {
+                Text(
+                    text = if (willHibernate) {
+                        "Restringe el segundo plano vía AppOps (RUN_ANY_IN_BACKGROUND) + Standby Bucket RESTRICTED y detiene sus procesos activos.\n\nSu ícono SEGUIRÁ VISIBLE en tu lanzador y podrás abrirla cuando quieras."
+                    } else {
+                        "Restaura los permisos de segundo plano (allow) y el Standby Bucket activo para ${confirmSoftApp.packageName}."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.toggleSoftHibernation(confirmSoftApp)
+                        pendingSoftApp = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (willHibernate) MemScopeColors.AmberWarning else MemScopeColors.EmeraldHealthy
+                    )
+                ) {
+                    Text(if (willHibernate) "Hibernar" else "Despertar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSoftApp = null }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun FreezerAppCard(
     app: InstalledAppFreezeInfo,
     shizukuReady: Boolean,
-    onActionClick: () -> Unit
+    userServiceReady: Boolean,
+    onFreezeActionClick: () -> Unit,
+    onSoftHibernateClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -252,95 +312,129 @@ private fun FreezerAppCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(12.dp)
         ) {
-            AppPackageIcon(packageName = app.packageName, size = 40.dp)
-            Spacer(modifier = Modifier.width(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AppPackageIcon(packageName = app.packageName, size = 40.dp)
+                Spacer(modifier = Modifier.width(10.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = app.appName,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (app.isFrozen) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            FrozenStateChip()
+                        } else if (app.isSoftHibernated) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            SoftHibernatedStateChip()
+                        } else if (app.isCriticalProtected) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            ProtectedPackageChip()
+                        }
+                    }
+
                     Text(
-                        text = app.appName,
-                        style = MaterialTheme.typography.titleMedium,
+                        text = app.packageName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        overflow = TextOverflow.Ellipsis
                     )
-                    if (app.isFrozen) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        FrozenStateChip()
-                    } else if (app.isCriticalProtected) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        ProtectedPackageChip()
-                    }
-                }
 
-                Text(
-                    text = app.packageName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                val runtimeNote = when {
-                    app.isCriticalProtected && app.protectionReason != null ->
-                        "Protegida: ${app.protectionReason}"
-                    app.isRunningNow ->
-                        "En ejecución: ${MemoryFormatter.formatKb(app.currentRamKb)}"
-                    else ->
-                        "v${app.versionName} • ${if (app.isSystemApp) "Sistema" else "Usuario"}"
-                }
-                Text(
-                    text = runtimeNote,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = when {
-                        app.isCriticalProtected -> MemScopeColors.EmeraldHealthy
-                        app.isRunningNow -> MemScopeColors.CyanTelemetry
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    val runtimeNote = when {
+                        app.isCriticalProtected && app.protectionReason != null ->
+                            "Protegida: ${app.protectionReason}"
+                        app.isRunningNow ->
+                            "En ejecución: ${MemoryFormatter.formatKb(app.currentRamKb)}"
+                        else ->
+                            "v${app.versionName} • ${if (app.isSystemApp) "Sistema" else "Usuario"}"
                     }
-                )
+                    Text(
+                        text = runtimeNote,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            app.isCriticalProtected -> MemScopeColors.EmeraldHealthy
+                            app.isRunningNow -> MemScopeColors.CyanTelemetry
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            if (app.isFrozen) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 OutlinedButton(
-                    onClick = onActionClick,
-                    enabled = shizukuReady,
+                    onClick = onSoftHibernateClick,
+                    enabled = shizukuReady && userServiceReady && (!app.isCriticalProtected || app.isSoftHibernated),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
+                        imageVector = Icons.Rounded.Bedtime,
                         contentDescription = null,
-                        tint = MemScopeColors.EmeraldHealthy,
+                        tint = if (app.isSoftHibernated) MemScopeColors.EmeraldHealthy else MemScopeColors.AmberWarning,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Activar", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        text = if (app.isSoftHibernated) "Despertar" else "Hibernar",
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
-            } else {
-                Button(
-                    onClick = onActionClick,
-                    enabled = shizukuReady && !app.isCriticalProtected,
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MemScopeColors.IndigoFrozen
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AcUnit,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Congelar", style = MaterialTheme.typography.labelMedium)
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                if (app.isFrozen) {
+                    OutlinedButton(
+                        onClick = onFreezeActionClick,
+                        enabled = shizukuReady,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = MemScopeColors.EmeraldHealthy,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Activar", style = MaterialTheme.typography.labelMedium)
+                    }
+                } else {
+                    Button(
+                        onClick = onFreezeActionClick,
+                        enabled = shizukuReady && !app.isCriticalProtected,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MemScopeColors.IndigoFrozen
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AcUnit,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Congelar", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }

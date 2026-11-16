@@ -16,15 +16,35 @@ data class ProtectionCheckResult(
 )
 
 /**
+ * Instantánea por ciclo del lanzador y teclado activos para evitar consultas repetidas
+ * a PackageManager y Settings.Secure por cada paquete evaluado.
+ */
+data class ProtectionContext(
+    val activeLauncherPackage: String?,
+    val activeKeyboardPackage: String?
+)
+
+/**
  * Lista blanca crítica y detector dinámico de componentes esenciales del dispositivo.
- * Evita que el usuario congele por accidente paquetes vitales (SystemUI, Launcher activo,
+ * Evita que el usuario congele o hiberne por accidente paquetes vitales (SystemUI, Launcher activo,
  * Teclado activo, Shizuku o la propia app), previniendo bloqueos del teléfono (soft-brick).
  */
 class CriticalAppProtector(private val context: Context) {
 
     private val packageManager: PackageManager = context.packageManager
 
+    fun captureContext(): ProtectionContext {
+        return ProtectionContext(
+            activeLauncherPackage = resolveDefaultLauncherPackage(),
+            activeKeyboardPackage = resolveDefaultInputMethodPackage()
+        )
+    }
+
     fun evaluate(packageName: String): ProtectionCheckResult {
+        return evaluate(packageName, captureContext())
+    }
+
+    fun evaluate(packageName: String, ctx: ProtectionContext): ProtectionCheckResult {
         if (packageName == context.packageName) {
             return ProtectionCheckResult(true, "Aplicación actual (MemScope)")
         }
@@ -33,13 +53,11 @@ class CriticalAppProtector(private val context: Context) {
             return ProtectionCheckResult(true, reason)
         }
 
-        val activeLauncher = resolveDefaultLauncherPackage()
-        if (activeLauncher != null && activeLauncher == packageName) {
+        if (ctx.activeLauncherPackage != null && ctx.activeLauncherPackage == packageName) {
             return ProtectionCheckResult(true, "Lanzador de inicio activo")
         }
 
-        val activeKeyboard = resolveDefaultInputMethodPackage()
-        if (activeKeyboard != null && activeKeyboard == packageName) {
+        if (ctx.activeKeyboardPackage != null && ctx.activeKeyboardPackage == packageName) {
             return ProtectionCheckResult(true, "Teclado del sistema activo")
         }
 
