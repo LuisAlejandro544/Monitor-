@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -96,13 +97,14 @@ fun ShizukuToolsScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(14.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -304,7 +306,7 @@ fun ShizukuToolsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        val options = listOf(1000L to "1s (Alta)", 2000L to "2s (Equilibrada)", 3000L to "3s", 5000L to "5s (Ahorro)")
+                        val options = listOf(1000L to "1s Alta", 2000L to "2s Balance", 3000L to "3s", 5000L to "5s Ahorro")
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -315,7 +317,7 @@ fun ShizukuToolsScreen(
                                 FilterChip(
                                     selected = state.preferences.pollingIntervalMs == ms,
                                     onClick = { viewModel.setPollingInterval(ms) },
-                                    label = { Text(label) }
+                                    label = { Text(label, maxLines = 1, softWrap = false) }
                                 )
                             }
                         }

@@ -52,6 +52,7 @@ data class AppMemoryInfo(
     val privateDirtyKb: Long,
     val nativePssKb: Long,
     val dalvikPssKb: Long,
+    val otherPssKb: Long = 0L,
     val swapKb: Long,
     val importance: ProcessImportance,
     val oomScoreAdj: Int,
@@ -112,11 +113,15 @@ data class SystemMemoryOverview(
     val swapFreeKb: Long,
     val isLowMemory: Boolean,
     val activeProcessCount: Int,
-    val historyUsedPercent: List<Float> = emptyList()
+    val historyUsedPercent: List<Float> = emptyList(),
+    val kernelMemKb: Long = 0L
 ) {
     val usedPercent: Float
         get() = if (totalRamKb > 0) (usedRamKb.toFloat() / totalRamKb.toFloat()).coerceIn(0f, 1f) else 0f
 
     val swapUsedKb: Long
         get() = (swapTotalKb - swapFreeKb).coerceAtLeast(0L)
+
+    val swapUsedPercent: Float
+        get() = if (swapTotalKb > 0) (swapUsedKb.toFloat() / swapTotalKb.toFloat()).coerceIn(0f, 1f) else 0f
 }

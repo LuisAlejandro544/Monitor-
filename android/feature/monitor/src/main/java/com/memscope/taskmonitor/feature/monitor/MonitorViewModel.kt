@@ -213,6 +213,12 @@ class MonitorViewModel(
         return repository.observePackageSamples(packageName)
     }
 
+    fun refreshPackageDetail(packageName: String) {
+        viewModelScope.launch {
+            repository.refreshPackageMemoryBreakdown(packageName)
+        }
+    }
+
     suspend fun loadPackagePermissions(packageName: String): List<Pair<String, Boolean>> {
         return repository.getDeclaredPermissions(packageName)
     }

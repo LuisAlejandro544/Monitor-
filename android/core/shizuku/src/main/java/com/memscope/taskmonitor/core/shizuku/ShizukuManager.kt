@@ -12,6 +12,7 @@ import com.memscope.taskmonitor.core.model.ShizukuStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +29,7 @@ import rikka.sui.Sui
  * 1. Registrar listeners de Binder (addBinderReceivedListenerSticky, addBinderDeadListener)
  *    y resultado de permisos (addRequestPermissionResultListener).
  * 2. Exponer un StateFlow<ShizukuStatus> reactivo para toda la UI.
- * 3. Vincular y desvincular el TaskMonitorUserService de forma segura en segundo plano.
+ * 3. Vincular, mantener reconectado y desvincular el TaskMonitorUserService en segundo plano.
  * 4. Despachar todas las llamadas IPC pesadas en Dispatchers.IO sin bloquear el hilo principal.
  */
 class ShizukuManager(
@@ -47,6 +48,12 @@ class ShizukuManager(
     @Volatile
     private var isInitialized = false
 
+    @Volatile
+    private var manualUnbindRequested = false
+
+    @Volatile
+    private var lastBindAttemptMillis = 0L
+
     private val userServiceArgs by lazy {
         Shizuku.UserServiceArgs(
             ComponentName(applicationId, TaskMonitorUserService::class.java.name)
@@ -61,6 +68,7 @@ class ShizukuManager(
     private val userServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             if (service != null && service.pingBinder()) {
+                manualUnbindRequested = false
                 userService = ITaskMonitorService.Stub.asInterface(service)
                 _status.update { it.copy(isUserServiceConnected = true, lastErrorMessage = null) }
                 Log.d(TAG, "UserService conectado correctamente.")
@@ -71,6 +79,12 @@ class ShizukuManager(
             userService = null
             _status.update { it.copy(isUserServiceConnected = false) }
             Log.d(TAG, "UserService desconectado.")
+            if (!manualUnbindRequested) {
+                scope.launch {
+                    delay(1200L)
+                    ensureUserServiceConnected()
+                }
+            }
         }
     }
 
@@ -118,6 +132,9 @@ class ShizukuManager(
         Shizuku.addRequestPermissionResultListener(permissionResultListener)
 
         refreshState()
+        if (_status.value.isFullyOperational) {
+            bindUserService()
+        }
     }
 
     /**
@@ -155,6 +172,10 @@ class ShizukuManager(
             -1
         }
         val version = runCatching { Shizuku.getVersion() }.getOrDefault(-1)
+        val svcAlive = userService?.asBinder()?.pingBinder() == true
+        if (!svcAlive) {
+            userService = null
+        }
 
         _status.update {
             it.copy(
@@ -165,7 +186,7 @@ class ShizukuManager(
                 uid = uid,
                 serverVersion = version,
                 isSuiDetected = runCatching { Sui.isSui() }.getOrDefault(it.isSuiDetected),
-                isUserServiceConnected = userService?.asBinder()?.pingBinder() == true
+                isUserServiceConnected = svcAlive
             )
         }
     }
@@ -177,7 +198,10 @@ class ShizukuManager(
         refreshState()
         val current = _status.value
         if (!current.isBinderAlive || current.isPreV11Unsupported) return false
-        if (current.isPermissionGranted) return true
+        if (current.isPermissionGranted) {
+            ensureUserServiceConnected()
+            return true
+        }
         if (current.shouldShowRationale) return false
 
         return runCatching {
@@ -189,12 +213,29 @@ class ShizukuManager(
         }
     }
 
+    /**
+     * Reconecta el UserService automáticamente si Shizuku está operativo y el servicio cayó.
+     */
+    fun ensureUserServiceConnected() {
+        if (manualUnbindRequested) return
+        val svcAlive = userService?.asBinder()?.pingBinder() == true
+        if (svcAlive) return
+        val now = System.currentTimeMillis()
+        if (now - lastBindAttemptMillis < 3000L) return
+        bindUserService()
+    }
+
     fun bindUserService() {
+        manualUnbindRequested = false
+        lastBindAttemptMillis = System.currentTimeMillis()
         scope.launch {
             if (!Shizuku.pingBinder()) return@launch
             if (Shizuku.isPreV11()) return@launch
             if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return@launch
-            if (userService?.asBinder()?.pingBinder() == true) return@launch
+            if (userService?.asBinder()?.pingBinder() == true) {
+                _status.update { it.copy(isUserServiceConnected = true) }
+                return@launch
+            }
 
             runCatching {
                 Shizuku.bindUserService(userServiceArgs, userServiceConnection)
@@ -206,6 +247,7 @@ class ShizukuManager(
     }
 
     fun unbindUserService() {
+        manualUnbindRequested = true
         runCatching {
             if (Shizuku.pingBinder()) {
                 Shizuku.unbindUserService(userServiceArgs, userServiceConnection, true)
@@ -239,6 +281,7 @@ class ShizukuManager(
         withContext(Dispatchers.IO) {
             val svc = userService
             if (svc == null || !svc.asBinder().pingBinder() || pids.isEmpty()) {
+                ensureUserServiceConnected()
                 return@withContext emptyMap()
             }
             runCatching {
@@ -249,7 +292,10 @@ class ShizukuManager(
     suspend fun readSystemProcMemInfo(): LongArray? =
         withContext(Dispatchers.IO) {
             val svc = userService
-            if (svc == null || !svc.asBinder().pingBinder()) return@withContext null
+            if (svc == null || !svc.asBinder().pingBinder()) {
+                ensureUserServiceConnected()
+                return@withContext null
+            }
             runCatching { svc.readSystemProcMemInfo() }.getOrNull()
         }
 
@@ -279,6 +325,15 @@ class ShizukuManager(
     suspend fun grantRuntimePermission(packageName: String, permissionName: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             val userId = Process.myUserHandle().hashCode()
+            if (permissionName == "android.permission.PACKAGE_USAGE_STATS") {
+                val svc = userService
+                if (svc != null && svc.asBinder().pingBinder()) {
+                    val ok = runCatching {
+                        svc.setRuntimePermissionViaUserService(packageName, permissionName, userId, true)
+                    }.getOrDefault(false)
+                    if (ok) return@withContext Result.success(Unit)
+                }
+            }
             val directResult = runCatching {
                 ShizukuSystemBridge.grantRuntimePermission(packageName, permissionName, userId)
             }

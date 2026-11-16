@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -119,13 +120,14 @@ fun MonitorScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(14.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
@@ -253,15 +255,20 @@ fun MonitorScreen(
 
                     OutlinedButton(
                         onClick = { sortMenuExpanded = true },
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Sort,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(state.sortOrder.labelEs)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = state.sortOrder.labelEs,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     DropdownMenu(
@@ -433,7 +440,7 @@ private fun ProcessTaskRowCard(
                     }
 
                     Text(
-                        text = "${app.importance.labelEs} • CPU: ${MemoryFormatter.formatCpu(app.cpuUsagePercent)} • Hilos: ${app.totalThreads}",
+                        text = "${app.importance.labelEs} • CPU ${MemoryFormatter.formatCpu(app.cpuUsagePercent)} • ${app.totalThreads} hilos",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -486,9 +493,16 @@ private fun ProcessTaskRowCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "RSS: ${MemoryFormatter.formatKb(app.currentRssKb)} • PIDs: ${app.pids.size} • OOM: ${app.oomScoreAdj} • ZRAM: ${MemoryFormatter.formatKb(app.swapKb)}",
+                        text = "RSS: ${MemoryFormatter.formatKb(app.currentRssKb)} • ZRAM: ${MemoryFormatter.formatKb(app.swapKb)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "PIDs: ${app.pids.size} • OOM: ${app.oomScoreAdj} • Privada: ${MemoryFormatter.formatKb(app.privateDirtyKb)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -497,10 +511,11 @@ private fun ProcessTaskRowCard(
                 MemorySparklineChart(
                     samples = app.recentSamplesKb.map { it.toFloat() },
                     modifier = Modifier
-                        .width(72.dp)
-                        .height(26.dp),
+                        .width(84.dp)
+                        .height(34.dp),
                     lineColor = ramColor,
-                    showPeakLine = false
+                    showPeakLine = true,
+                    dynamicScale = true
                 )
             }
 

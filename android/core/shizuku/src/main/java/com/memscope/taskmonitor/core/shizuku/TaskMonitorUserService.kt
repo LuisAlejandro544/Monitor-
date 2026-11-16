@@ -49,27 +49,33 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
         for (pid in pids) {
             if (pid <= 0) continue
             val statusFile = File("/proc/$pid/status")
-            if (!statusFile.exists() || !statusFile.canRead()) continue
+            if (!statusFile.exists()) continue
 
             var name = ""
             var vmRss = 0L
             var vmHwm = 0L
             var vmSwap = 0L
             var threads = 0
+            var readOk = false
 
             runCatching {
-                statusFile.forEachLine { line ->
-                    when {
-                        line.startsWith("Name:") -> name = line.substringAfter(':').trim()
-                        line.startsWith("VmRSS:") -> vmRss = parseKbValue(line)
-                        line.startsWith("VmHWM:") -> vmHwm = parseKbValue(line)
-                        line.startsWith("VmSwap:") -> vmSwap = parseKbValue(line)
-                        line.startsWith("Threads:") -> {
-                            threads = line.substringAfter(':').trim().toIntOrNull() ?: 0
+                statusFile.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        readOk = true
+                        when {
+                            line.startsWith("Name:") -> name = line.substringAfter(':').trim()
+                            line.startsWith("VmRSS:") -> vmRss = parseKbValue(line)
+                            line.startsWith("VmHWM:") -> vmHwm = parseKbValue(line)
+                            line.startsWith("VmSwap:") -> vmSwap = parseKbValue(line)
+                            line.startsWith("Threads:") -> {
+                                threads = line.substringAfter(':').trim().toIntOrNull() ?: 0
+                            }
                         }
                     }
                 }
             }
+
+            if (!readOk) continue
 
             // Lectura rápida de /proc/<pid>/smaps_rollup (Linux 4.14+) para obtener PSS real
             // sin saturar Binder con IActivityManager.getProcessMemoryInfo.
@@ -78,12 +84,8 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
             val effectiveSwap = if (rollup.swapKb > 0L) rollup.swapKb else vmSwap
 
             val oomAdj = runCatching {
-                val adjFile = File("/proc/$pid/oom_score_adj")
-                if (adjFile.exists() && adjFile.canRead()) {
-                    adjFile.readText().trim().toIntOrNull() ?: 0
-                } else {
-                    0
-                }
+                File("/proc/$pid/oom_score_adj").bufferedReader().use { it.readText() }
+                    .trim().toIntOrNull() ?: 0
             }.getOrDefault(0)
 
             val cpuJiffies = readProcessCpuJiffies(pid)
@@ -92,7 +94,7 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
                 ProcessKernelMem(
                     pid = pid,
                     vmRssKb = effectiveRss,
-                    vmHwmKb = vmHwm,
+                    vmHwmKb = maxOf(vmHwm, effectiveRss),
                     vmSwapKb = effectiveSwap,
                     oomScoreAdj = oomAdj,
                     procName = name,
@@ -122,7 +124,7 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
      */
     private fun readSmapsRollup(pid: Int): SmapsRollupStats {
         val rollupFile = File("/proc/$pid/smaps_rollup")
-        if (!rollupFile.exists() || !rollupFile.canRead()) {
+        if (!rollupFile.exists()) {
             return SmapsRollupStats()
         }
 
@@ -134,23 +136,17 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
         var parsedAny = false
 
         return runCatching {
-            rollupFile.forEachLine { line ->
-                when {
-                    line.startsWith("Rss:") -> {
-                        rss = parseKbValue(line)
-                    }
-                    line.startsWith("Pss:") -> {
-                        pss = parseKbValue(line)
-                        parsedAny = true
-                    }
-                    line.startsWith("Private_Dirty:") -> {
-                        privDirty = parseKbValue(line)
-                    }
-                    line.startsWith("SwapPss:") -> {
-                        swapPss = parseKbValue(line)
-                    }
-                    line.startsWith("Swap:") -> {
-                        swap = parseKbValue(line)
+            rollupFile.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    when {
+                        line.startsWith("Rss:") -> rss = parseKbValue(line)
+                        line.startsWith("Pss:") -> {
+                            pss = parseKbValue(line)
+                            parsedAny = true
+                        }
+                        line.startsWith("Private_Dirty:") -> privDirty = parseKbValue(line)
+                        line.startsWith("SwapPss:") -> swapPss = parseKbValue(line)
+                        line.startsWith("Swap:") -> swap = parseKbValue(line)
                     }
                 }
             }
@@ -171,8 +167,8 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
     private fun readProcessCpuJiffies(pid: Int): Long {
         return runCatching {
             val statFile = File("/proc/$pid/stat")
-            if (!statFile.exists() || !statFile.canRead()) return 0L
-            val content = statFile.readText()
+            if (!statFile.exists()) return 0L
+            val content = statFile.bufferedReader().use { it.readText() }
             val closeParenIdx = content.lastIndexOf(')')
             if (closeParenIdx == -1 || closeParenIdx + 2 >= content.length) return 0L
 
@@ -192,7 +188,7 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
     override fun readTotalCpuJiffies(): Long {
         return runCatching {
             val statFile = File("/proc/stat")
-            if (!statFile.exists() || !statFile.canRead()) return 0L
+            if (!statFile.exists()) return 0L
             val firstLine = statFile.bufferedReader().use { it.readLine() } ?: return 0L
             if (!firstLine.startsWith("cpu ")) return 0L
             val parts = firstLine.trim().split(WHITESPACE_REGEX)
@@ -205,26 +201,77 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
     }
 
     /**
-     * Devuelve un arreglo de 6 elementos en KB:
-     * [0] MemTotal, [1] MemAvailable, [2] Cached, [3] Buffers, [4] SwapTotal, [5] SwapFree
+     * Devuelve un arreglo de 8 elementos en KB:
+     * [0] MemTotal, [1] MemAvailable, [2] Cached + SReclaimable, [3] Buffers,
+     * [4] SwapTotal, [5] SwapFree, [6] Kernel (Slab + KernelStack + PageTables + VmallocUsed), [7] MemFree
      */
     override fun readSystemProcMemInfo(): LongArray {
-        val out = LongArray(6)
-        val memInfoFile = File("/proc/meminfo")
-        if (!memInfoFile.exists() || !memInfoFile.canRead()) return out
+        val out = LongArray(8)
+        var parsedTotal = 0L
+        var cached = 0L
+        var sReclaimable = 0L
+        var slab = 0L
+        var kernelStack = 0L
+        var pageTables = 0L
+        var vmallocUsed = 0L
 
-        runCatching {
-            memInfoFile.forEachLine { line ->
-                when {
-                    line.startsWith("MemTotal:") -> out[0] = parseKbValue(line)
-                    line.startsWith("MemAvailable:") -> out[1] = parseKbValue(line)
-                    line.startsWith("Cached:") -> out[2] = parseKbValue(line)
-                    line.startsWith("Buffers:") -> out[3] = parseKbValue(line)
-                    line.startsWith("SwapTotal:") -> out[4] = parseKbValue(line)
-                    line.startsWith("SwapFree:") -> out[5] = parseKbValue(line)
+        fun parseLine(line: String) {
+            when {
+                line.startsWith("MemTotal:") -> {
+                    parsedTotal = parseKbValue(line)
+                    out[0] = parsedTotal
+                }
+                line.startsWith("MemFree:") -> out[7] = parseKbValue(line)
+                line.startsWith("MemAvailable:") -> out[1] = parseKbValue(line)
+                line.startsWith("Cached:") -> cached = parseKbValue(line)
+                line.startsWith("SReclaimable:") -> sReclaimable = parseKbValue(line)
+                line.startsWith("Buffers:") -> out[3] = parseKbValue(line)
+                line.startsWith("SwapTotal:") -> out[4] = parseKbValue(line)
+                line.startsWith("SwapFree:") -> out[5] = parseKbValue(line)
+                line.startsWith("Slab:") -> slab = parseKbValue(line)
+                line.startsWith("KernelStack:") -> kernelStack = parseKbValue(line)
+                line.startsWith("PageTables:") -> pageTables = parseKbValue(line)
+                line.startsWith("VmallocUsed:") -> vmallocUsed = parseKbValue(line)
+            }
+        }
+
+        val directOk = runCatching {
+            File("/proc/meminfo").bufferedReader().useLines { lines ->
+                lines.forEach(::parseLine)
+            }
+            parsedTotal > 0L
+        }.getOrDefault(false)
+
+        if (!directOk) {
+            val cmd = runCommandWithOutput("cat", "/proc/meminfo")
+            if (cmd.first) {
+                cmd.second.lineSequence().forEach(::parseLine)
+            }
+        }
+
+        out[2] = cached + sReclaimable
+        out[6] = slab + kernelStack + pageTables + vmallocUsed
+
+        // Si MemAvailable no vino o es 0 (kernels antiguos), aproximar con MemFree + Cached + Buffers
+        if (out[1] == 0L && out[0] > 0L) {
+            out[1] = (out[7] + out[2] + out[3]).coerceAtMost(out[0])
+        }
+
+        // Respaldo para ZRAM si SwapTotal no apareció en /proc/meminfo
+        if (out[4] == 0L) {
+            runCatching {
+                val diskBytes = File("/sys/block/zram0/disksize").bufferedReader().use { it.readText() }
+                    .trim().toLongOrNull() ?: 0L
+                if (diskBytes > 0L) {
+                    out[4] = diskBytes / 1024L
+                    val mmStat = File("/sys/block/zram0/mm_stat").bufferedReader().use { it.readText() }
+                        .trim().split(WHITESPACE_REGEX)
+                    val origDataKb = (mmStat.firstOrNull()?.toLongOrNull() ?: 0L) / 1024L
+                    out[5] = (out[4] - origDataKb).coerceAtLeast(0L)
                 }
             }
         }
+
         return out
     }
 
@@ -239,6 +286,16 @@ class TaskMonitorUserService : ITaskMonitorService.Stub {
         grant: Boolean
     ): Boolean {
         if (packageName.isNullOrBlank() || permissionName.isNullOrBlank()) return false
+        if (permissionName == "android.permission.PACKAGE_USAGE_STATS") {
+            val mode = if (grant) "allow" else "ignore"
+            return runCommandOk(
+                "cmd", "appops", "set",
+                "--user", userId.toString(),
+                packageName,
+                "GET_USAGE_STATS",
+                mode
+            )
+        }
         val action = if (grant) "grant" else "revoke"
         return runCommandOk(
             "pm",

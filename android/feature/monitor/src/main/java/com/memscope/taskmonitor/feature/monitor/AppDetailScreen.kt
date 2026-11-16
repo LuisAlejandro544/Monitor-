@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -54,7 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.memscope.taskmonitor.core.ui.components.AppPackageIcon
 import com.memscope.taskmonitor.core.ui.components.MemoryFormatter
-import com.memscope.taskmonitor.core.ui.components.MemorySparklineChart
+import com.memscope.taskmonitor.core.ui.components.PcTelemetryGraphPanel
 import com.memscope.taskmonitor.core.ui.theme.MemScopeColors
 import kotlinx.coroutines.launch
 
@@ -84,6 +85,10 @@ fun AppDetailScreen(
     var showPermissionsDialog by remember { mutableStateOf(false) }
     var permissionsList by remember { mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) }
 
+    LaunchedEffect(packageName) {
+        viewModel.refreshPackageDetail(packageName)
+    }
+
     LaunchedEffect(state.actionFeedback) {
         val msg = state.actionFeedback
         if (msg != null) {
@@ -94,9 +99,11 @@ fun AppDetailScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         AppPackageIcon(packageName = packageName, size = 32.dp)
@@ -218,11 +225,13 @@ fun AppDetailScreen(
                             liveApp?.recentSamplesKb?.map { it.toFloat() }.orEmpty()
                         }
 
-                        MemorySparklineChart(
+                        PcTelemetryGraphPanel(
                             samples = chartPoints,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(130.dp)
+                            unitLabel = { kb -> MemoryFormatter.formatKb(kb.toLong()) },
+                            graphHeight = 148.dp,
+                            lineColor = MemScopeColors.CyanTelemetry,
+                            peakMarkerColor = MemScopeColors.CrimsonPeak,
+                            dynamicScale = true
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -269,6 +278,7 @@ fun AppDetailScreen(
                         DetailRow("Private Dirty (Exclusiva)", MemoryFormatter.formatKb(liveApp?.privateDirtyKb ?: 0L))
                         DetailRow("Native Heap (C/C++)", MemoryFormatter.formatKb(liveApp?.nativePssKb ?: 0L))
                         DetailRow("Dalvik / ART (Kotlin/Java)", MemoryFormatter.formatKb(liveApp?.dalvikPssKb ?: 0L))
+                        DetailRow("Gráficos, Mmap y Otros (PSS)", MemoryFormatter.formatKb(liveApp?.otherPssKb ?: 0L))
                         DetailRow("Swap / ZRAM", MemoryFormatter.formatKb(liveApp?.swapKb ?: 0L))
                         DetailRow("PIDs Activos", liveApp?.pids?.joinToString(", ") ?: "Inactiva")
                         DetailRow("OOM Score Adj", liveApp?.oomScoreAdj?.toString() ?: "—")

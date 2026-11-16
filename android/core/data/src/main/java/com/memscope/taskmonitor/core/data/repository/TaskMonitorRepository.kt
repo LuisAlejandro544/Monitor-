@@ -100,16 +100,18 @@ class TaskMonitorRepository(
         }
     }
 
-    // Cachés en memoria para gráficas rápidas, picos de sesión y deltas de CPU
+    // Cachés en memoria para gráficas rápidas, picos de sesión, segmentos y deltas de CPU
     private val recentSparklines = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val sessionPeaks = ConcurrentHashMap<String, Long>()
     private val prevPidCpuJiffies = ConcurrentHashMap<Int, Long>()
     private var prevTotalCpuJiffies: Long = 0L
     private val systemPercentHistory = ArrayDeque<Float>(30)
     private val appLabelCache = ConcurrentHashMap<String, Pair<String, Boolean>>()
+    private val detailSegmentCache = ConcurrentHashMap<String, Triple<Long, Long, Long>>()
 
     private var pollingJob: Job? = null
     private var currentIntervalMs: Long = 2000L
+    private var lastPruneMillis: Long = 0L
 
     init {
         startMonitoringLoop()
@@ -133,6 +135,38 @@ class TaskMonitorRepository(
         _isMonitoringActive.value = !paused
     }
 
+    /**
+     * Obtiene bajo demanda el desglose detallado (Native, Dalvik, Otros/Gráficos) desde IActivityManager
+     * para la pantalla AppDetailScreen cuando el muestreo rápido usó /proc/<pid>/smaps_rollup.
+     */
+    suspend fun refreshPackageMemoryBreakdown(packageName: String) = withContext(Dispatchers.IO) {
+        if (!shizukuManager.status.value.isFullyOperational) return@withContext
+        val app = _runningApps.value.firstOrNull { it.packageName == packageName } ?: return@withContext
+        val pids = app.pids.toIntArray()
+        if (pids.isEmpty()) return@withContext
+        val infos = shizukuManager.getProcessMemoryInfo(pids).getOrNull() ?: return@withContext
+        var nativeSum = 0L
+        var dalvikSum = 0L
+        var otherSum = 0L
+        for (info in infos) {
+            nativeSum += info.nativePss.toLong()
+            dalvikSum += info.dalvikPss.toLong()
+            otherSum += info.otherPss.toLong()
+        }
+        detailSegmentCache[packageName] = Triple(nativeSum, dalvikSum, otherSum)
+        _runningApps.value = _runningApps.value.map { item ->
+            if (item.packageName == packageName) {
+                item.copy(
+                    nativePssKb = nativeSum,
+                    dalvikPssKb = dalvikSum,
+                    otherPssKb = otherSum
+                )
+            } else {
+                item
+            }
+        }
+    }
+
     private fun startMonitoringLoop() {
         pollingJob?.cancel()
         pollingJob = scope.launch {
@@ -153,7 +187,14 @@ class TaskMonitorRepository(
      */
     suspend fun sampleOnce(intervalSeconds: Long = 2L) = withContext(Dispatchers.IO) {
         val status = shizukuManager.status.value
+        if (status.isFullyOperational && !status.isUserServiceConnected) {
+            shizukuManager.ensureUserServiceConnected()
+        }
+
         val procMemInfo = shizukuManager.readSystemProcMemInfo()
+            ?.takeIf { (it.getOrNull(0) ?: 0L) > 0L }
+            ?: readLocalProcMemInfoFallback()
+
         val amMemInfo = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(amMemInfo)
 
@@ -163,6 +204,7 @@ class TaskMonitorRepository(
         val buffersKb = procMemInfo?.getOrNull(3) ?: 0L
         val swapTotalKb = procMemInfo?.getOrNull(4) ?: 0L
         val swapFreeKb = procMemInfo?.getOrNull(5) ?: 0L
+        val kernelMemKb = procMemInfo?.getOrNull(6) ?: 0L
         val usedKb = (totalKb - availKb).coerceAtLeast(0L)
 
         val usedPercent = if (totalKb > 0) (usedKb.toFloat() / totalKb.toFloat()).coerceIn(0f, 1f) else 0f
@@ -180,7 +222,8 @@ class TaskMonitorRepository(
                 swapFreeKb = swapFreeKb,
                 isLowMemory = amMemInfo.lowMemory,
                 activeProcessCount = 0,
-                historyUsedPercent = systemPercentHistory.toList()
+                historyUsedPercent = systemPercentHistory.toList(),
+                kernelMemKb = kernelMemKb
             )
             return@withContext
         }
@@ -197,7 +240,8 @@ class TaskMonitorRepository(
                 swapFreeKb = swapFreeKb,
                 isLowMemory = amMemInfo.lowMemory,
                 activeProcessCount = 0,
-                historyUsedPercent = systemPercentHistory.toList()
+                historyUsedPercent = systemPercentHistory.toList(),
+                kernelMemKb = kernelMemKb
             )
             return@withContext
         }
@@ -220,13 +264,13 @@ class TaskMonitorRepository(
         allPids.forEach { activePidSet.add(it) }
         prevPidCpuJiffies.keys.retainAll(activePidSet)
 
-        // Solo consultar IActivityManager.getProcessMemoryInfo para los PIDs donde smaps_rollup no esté disponible
+        // Consultar IActivityManager.getProcessMemoryInfo para los PIDs sin smaps_rollup
         val pidsNeedingFallback = allPids.filter { pid ->
             kernelMemByPid[pid]?.hasSmapsRollup != true
         }
         val memoryInfoByPid = HashMap<Int, android.os.Debug.MemoryInfo>(pidsNeedingFallback.size)
         if (pidsNeedingFallback.isNotEmpty()) {
-            pidsNeedingFallback.chunked(40).forEach { chunk ->
+            pidsNeedingFallback.chunked(32).forEach { chunk ->
                 val chunkArray = chunk.toIntArray()
                 val memInfos = shizukuManager.getProcessMemoryInfo(chunkArray).getOrNull()
                 if (memInfos != null) {
@@ -269,6 +313,7 @@ class TaskMonitorRepository(
             var totalPrivateDirtyKb = 0L
             var totalNativePssKb = 0L
             var totalDalvikPssKb = 0L
+            var totalOtherPssKb = 0L
             var totalSwapKb = 0L
             var totalThreads = 0
             var pkgCpuDelta = 0L
@@ -294,9 +339,11 @@ class TaskMonitorRepository(
                 }
                 val nativePss = (dbg?.nativePss ?: 0).toLong()
                 val dalvikPss = (dbg?.dalvikPss ?: 0).toLong()
-                val swappableOrSwap = kernel?.vmSwapKb ?: (dbg?.totalSwappablePss ?: 0).toLong()
-                val rss = kernel?.vmRssKb?.takeIf { it > 0 } ?: pss
-                val hwm = kernel?.vmHwmKb?.takeIf { it > 0 } ?: rss
+                val otherPss = (dbg?.otherPss ?: 0).toLong()
+                val swappableOrSwap = kernel?.vmSwapKb?.takeIf { it > 0L }
+                    ?: (dbg?.totalSwappablePss ?: 0).toLong()
+                val rss = kernel?.vmRssKb?.takeIf { it > 0L } ?: pss
+                val hwm = kernel?.vmHwmKb?.takeIf { it > 0L } ?: rss
 
                 totalPssKb += pss
                 totalRssKb += rss
@@ -304,6 +351,7 @@ class TaskMonitorRepository(
                 totalPrivateDirtyKb += privDirty
                 totalNativePssKb += nativePss
                 totalDalvikPssKb += dalvikPss
+                totalOtherPssKb += otherPss
                 totalSwapKb += swappableOrSwap
                 totalThreads += kernel?.threadCount ?: 0
 
@@ -327,6 +375,16 @@ class TaskMonitorRepository(
 
             if (lowestOomAdj == 1000 && procList.isNotEmpty()) {
                 lowestOomAdj = 0
+            }
+
+            if (totalNativePssKb == 0L && totalDalvikPssKb == 0L && totalOtherPssKb == 0L) {
+                detailSegmentCache[pkg]?.let { cached ->
+                    totalNativePssKb = cached.first
+                    totalDalvikPssKb = cached.second
+                    totalOtherPssKb = cached.third
+                }
+            } else {
+                detailSegmentCache[pkg] = Triple(totalNativePssKb, totalDalvikPssKb, totalOtherPssKb)
             }
 
             val cpuPercent = if (totalCpuDelta > 0L) {
@@ -358,6 +416,7 @@ class TaskMonitorRepository(
                     privateDirtyKb = totalPrivateDirtyKb,
                     nativePssKb = totalNativePssKb,
                     dalvikPssKb = totalDalvikPssKb,
+                    otherPssKb = totalOtherPssKb,
                     swapKb = totalSwapKb,
                     importance = bestImportance,
                     oomScoreAdj = lowestOomAdj,
@@ -412,7 +471,10 @@ class TaskMonitorRepository(
 
         historyDao.upsertHistory(entitiesToUpsert)
         historyDao.insertSamples(samplesToInsert)
-        historyDao.pruneSamplesOlderThan(now - 6 * 60 * 60 * 1000L)
+        if (now - lastPruneMillis >= 60_000L) {
+            lastPruneMillis = now
+            historyDao.pruneSamplesOlderThan(now - 6 * 60 * 60 * 1000L)
+        }
 
         _runningApps.value = updatedApps.sortedByDescending { it.currentPssKb }
         _systemOverview.value = SystemMemoryOverview(
@@ -425,8 +487,48 @@ class TaskMonitorRepository(
             swapFreeKb = swapFreeKb,
             isLowMemory = amMemInfo.lowMemory,
             activeProcessCount = processes.size,
-            historyUsedPercent = systemPercentHistory.toList()
+            historyUsedPercent = systemPercentHistory.toList(),
+            kernelMemKb = kernelMemKb
         )
+    }
+
+    /**
+     * Respaldo local de /proc/meminfo cuando el UserService aún no conecta o Shizuku no está autorizado.
+     */
+    private fun readLocalProcMemInfoFallback(): LongArray? {
+        return runCatching {
+            val file = java.io.File("/proc/meminfo")
+            if (!file.exists()) return null
+            val out = LongArray(8)
+            var cached = 0L
+            var sReclaimable = 0L
+            var slab = 0L
+            var kernelStack = 0L
+            var pageTables = 0L
+            var vmallocUsed = 0L
+            file.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val kb = line.substringAfter(':').trim().substringBefore(' ').trim().toLongOrNull() ?: 0L
+                    when {
+                        line.startsWith("MemTotal:") -> out[0] = kb
+                        line.startsWith("MemAvailable:") -> out[1] = kb
+                        line.startsWith("MemFree:") -> out[7] = kb
+                        line.startsWith("Cached:") -> cached = kb
+                        line.startsWith("SReclaimable:") -> sReclaimable = kb
+                        line.startsWith("Buffers:") -> out[3] = kb
+                        line.startsWith("SwapTotal:") -> out[4] = kb
+                        line.startsWith("SwapFree:") -> out[5] = kb
+                        line.startsWith("Slab:") -> slab = kb
+                        line.startsWith("KernelStack:") -> kernelStack = kb
+                        line.startsWith("PageTables:") -> pageTables = kb
+                        line.startsWith("VmallocUsed:") -> vmallocUsed = kb
+                    }
+                }
+            }
+            out[2] = cached + sReclaimable
+            out[6] = slab + kernelStack + pageTables + vmallocUsed
+            if (out[0] > 0L) out else null
+        }.getOrNull()
     }
 
     /**

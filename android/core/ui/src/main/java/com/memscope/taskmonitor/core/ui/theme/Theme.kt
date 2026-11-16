@@ -13,60 +13,62 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * Paleta cromática técnica inspirada en administradores de tareas y monitores de sistemas.
- * Proporciona alto contraste y colores semánticos claros para carga de RAM y estados congelados.
+ * Paleta cromática técnica inspirada en consolas profesionales de telemetría y
+ * administradores de tareas de escritorio (Obsidian Telemetry).
+ * Alto contraste, bordes definidos y acentos técnicos para carga de RAM, picos y congelación.
  */
 object MemScopeColors {
-    val CyanTelemetry = Color(0xFF22D3EE)
-    val CyanDeep = Color(0xFF0891B2)
-    val EmeraldHealthy = Color(0xFF34D399)
-    val AmberWarning = Color(0xFFFBBF24)
-    val CrimsonPeak = Color(0xFFF87171)
-    val IndigoFrozen = Color(0xFF818CF8)
-    val SlateSurfaceDark = Color(0xFF0E1520)
-    val SlateCardDark = Color(0xFF16202F)
-    val SlateElevatedDark = Color(0xFF1E2B3E)
-    val SlateBorderDark = Color(0xFF2B3B52)
+    val CyanTelemetry = Color(0xFF00E5FF)
+    val CyanDeep = Color(0xFF0284C7)
+    val EmeraldHealthy = Color(0xFF10D98B)
+    val AmberWarning = Color(0xFFFFB020)
+    val CrimsonPeak = Color(0xFFFF4757)
+    val IndigoFrozen = Color(0xFF3B82F6)
+    val SlateSurfaceDark = Color(0xFF070B11)
+    val SlateCardDark = Color(0xFF0E141E)
+    val SlateElevatedDark = Color(0xFF151E2C)
+    val SlateBorderDark = Color(0xFF223044)
+    val GraphCanvasDark = Color(0xFF05080D)
 }
 
 private val DarkColorScheme = darkColorScheme(
     primary = MemScopeColors.CyanTelemetry,
-    onPrimary = Color(0xFF052028),
-    primaryContainer = Color(0xFF0F3947),
-    onPrimaryContainer = Color(0xFFA5F3FC),
+    onPrimary = Color(0xFF021A20),
+    primaryContainer = Color(0xFF093542),
+    onPrimaryContainer = Color(0xFFA7F5FF),
     secondary = MemScopeColors.IndigoFrozen,
-    onSecondary = Color(0xFF13163B),
-    secondaryContainer = Color(0xFF252B5C),
-    onSecondaryContainer = Color(0xFFE0E7FF),
+    onSecondary = Color(0xFF071633),
+    secondaryContainer = Color(0xFF162C54),
+    onSecondaryContainer = Color(0xFFD6E6FF),
     tertiary = MemScopeColors.EmeraldHealthy,
-    onTertiary = Color(0xFF04291E),
+    onTertiary = Color(0xFF022619),
     background = MemScopeColors.SlateSurfaceDark,
-    onBackground = Color(0xFFE6EDF6),
+    onBackground = Color(0xFFEDF2F7),
     surface = MemScopeColors.SlateCardDark,
-    onSurface = Color(0xFFE6EDF6),
+    onSurface = Color(0xFFEDF2F7),
     surfaceVariant = MemScopeColors.SlateElevatedDark,
-    onSurfaceVariant = Color(0xFF9FB0C7),
+    onSurfaceVariant = Color(0xFF94A6BE),
     outline = MemScopeColors.SlateBorderDark,
     error = MemScopeColors.CrimsonPeak,
-    onError = Color(0xFF3D0A0A)
+    onError = Color(0xFF3A060C)
 )
 
 private val LightColorScheme = lightColorScheme(
     primary = MemScopeColors.CyanDeep,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFCFFAFE),
-    onPrimaryContainer = Color(0xFF083344),
-    secondary = Color(0xFF4F46E5),
+    primaryContainer = Color(0xFFD6F0FF),
+    onPrimaryContainer = Color(0xFF082F49),
+    secondary = Color(0xFF2563EB),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE0E7FF),
-    onSecondaryContainer = Color(0xFF1E1B4B),
+    secondaryContainer = Color(0xFFDBEAFE),
+    onSecondaryContainer = Color(0xFF1E3A8A),
     tertiary = Color(0xFF059669),
     onTertiary = Color.White,
-    background = Color(0xFFF1F5F9),
-    onBackground = Color(0xFF0F172A),
+    background = Color(0xFFF3F6FA),
+    onBackground = Color(0xFF0B1220),
     surface = Color.White,
-    onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFE2E8F0),
+    onSurface = Color(0xFF0B1220),
+    surfaceVariant = Color(0xFFE6ECF4),
     onSurfaceVariant = Color(0xFF475569),
     outline = Color(0xFFCBD5E1),
     error = Color(0xFFDC2626),
@@ -78,13 +80,13 @@ private val MemScopeTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 20.sp,
-        lineHeight = 26.sp
+        lineHeight = 25.sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp
+        fontSize = 15.sp,
+        lineHeight = 20.sp
     ),
     titleSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -109,7 +111,7 @@ private val MemScopeTypography = Typography(
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Medium,
         fontSize = 10.sp,
-        lineHeight = 12.sp,
+        lineHeight = 13.sp,
         fontFeatureSettings = "tnum"
     )
 )
